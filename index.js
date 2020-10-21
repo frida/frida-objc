@@ -22,6 +22,20 @@ function Runtime() {
     let cachedNSStringCtor = null;
     let cachedNSNumber = null;
     let cachedNSNumberCtor = null;
+    let cachedNSNumberBoolean = null;
+    let cachedNSNumberBooleanCtor = null;
+    let cachedNSArray = null;
+    let cachedNSDictionary = null;
+    let cachedNSMutableArray = null;
+    let cachedNSMutableArrayCtor = null;
+    let cachedNSMutableDictionary = null;
+    let cachedNSMutableDictionaryCtor = null;
+    let cachedNSDate = null;
+    let cachedNSDateCtor = null;
+    let cachedNSData = null;
+    let cachedNSDataCtor = null;
+    let cachedNSNull = null;
+    let cachedNSNullInstance = null;
     let singularTypeById = null;
 
     try {
@@ -451,6 +465,74 @@ function Runtime() {
         let cachedOwnMethodNames = null;
         let cachedIvars = null;
         let weakRef = null;
+        let cachedIsKindOfClass = null;
+
+        function toJSObject(o) {
+            if (cachedNSNumber === null) {
+                cachedNSNumber = classRegistry.NSNumber;
+            }
+            if (cachedNSString === null) {
+                cachedNSString = classRegistry.NSString;
+            }
+            if (cachedNSArray === null) {
+                cachedNSArray = classRegistry.NSArray;
+            }
+            if (cachedNSDictionary === null) {
+                cachedNSDictionary = classRegistry.NSDictionary;
+            }
+            if (cachedNSDate === null) {
+                cachedNSDate = classRegistry.NSDate;
+            }
+            if (cachedNSData === null) {
+                cachedNSData = classRegistry.NSData;
+            }
+            if (cachedNSNull === null) {
+                cachedNSNull = classRegistry.NSNull;
+            }
+            if (cachedIsKindOfClass === null) {
+                cachedIsKindOfClass = classRegistry.NSObject.isKindOfClass_;
+            }
+            if (cachedIsKindOfClass.call(o, cachedNSNumber)) {
+                const toNumberImpl = o.doubleValue;
+                return toNumberImpl.call(o);
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSString)) {
+                const toStringImpl = o.UTF8String;
+                return toStringImpl.call(o);
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSArray)) {
+                const arr = [];
+                const count = o.count().valueOf();
+                const objectAtIndexImpl = o.objectAtIndex_;
+                for (let i = 0; i !== count; i++) {
+                    const element = objectAtIndexImpl.call(o, i);
+                    arr.push(toJSObject(element));
+                }
+                return arr;
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSDictionary)) {
+                const dict = {};
+                const enumerator = o.keyEnumerator();
+                const objectForKeyImpl = o.objectForKey_;
+                let key;
+                while ((key = enumerator.nextObject()) !== null) {
+                    const value = objectForKeyImpl.call(o, key);
+                    dict[toJSObject(key)] = toJSObject(value);
+                }
+                return dict;
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSDate)) {
+                return new Date(o.timeIntervalSince1970() * 1000);
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSData)) {
+                return o.bytes().readByteArray(o.length());
+            }
+            else if (cachedIsKindOfClass.call(o, cachedNSNull)) {
+                return null;
+            }
+
+            return o.toString();
+        }
 
         handle = getHandle(handle);
 
@@ -482,8 +564,11 @@ function Runtime() {
                         return hasProperty;
                     case "toJSON":
                         return toJSON;
-                    case "toString":
                     case "valueOf":
+                        return function () {
+                            return toJSObject(receiver);
+                        };
+                    case "toString":
                         const descriptionImpl = receiver.description;
                         if (descriptionImpl !== undefined) {
                             const description = descriptionImpl.call(receiver);
@@ -2307,23 +2392,100 @@ function Runtime() {
         }
     };
 
-    const toNativeId = function (v) {
-        if (v === null)
+    const toNativeId = function (v, toNSNull) {
+        toNSNull = typeof toNSNull !== "undefined" ? toNSNull : false;
+
+        if (v === null) {
+            if (toNSNull) {
+                if (cachedNSNullInstance === null) {
+                    cachedNSNullInstance = classRegistry.NSNull.null();
+                }
+                return cachedNSNullInstance;
+            }
             return NULL;
+        }
 
         const type = typeof v;
         if (type === 'string') {
-            if (cachedNSStringCtor === null) {
+            if (cachedNSString === null) {
                 cachedNSString = classRegistry.NSString;
+            }
+            if (cachedNSStringCtor === null) {
                 cachedNSStringCtor = cachedNSString.stringWithUTF8String_;
             }
             return cachedNSStringCtor.call(cachedNSString, Memory.allocUtf8String(v));
-        } else if (type === 'number') {
-            if (cachedNSNumberCtor === null) {
+        }
+        else if (type === 'number' && !isNaN(v)) {
+            if (cachedNSNumber === null) {
                 cachedNSNumber = classRegistry.NSNumber;
+            }
+            if (cachedNSNumberCtor === null) {
                 cachedNSNumberCtor = cachedNSNumber.numberWithDouble_;
             }
             return cachedNSNumberCtor.call(cachedNSNumber, v);
+        }
+        else if (type === 'boolean') {
+            if (cachedNSNumberBoolean === null) {
+                cachedNSNumberBoolean = classRegistry.NSNumber;
+            }
+            if (cachedNSNumberBooleanCtor === null) {
+                cachedNSNumberBooleanCtor = cachedNSNumberBoolean.numberWithBool_;
+            }
+            return cachedNSNumberBooleanCtor.call(cachedNSNumberBoolean, v);
+        }
+        else if (type === 'object') {
+            // RegExp and URL are not supported
+            if (v.constructor === Date) {
+                if (cachedNSDate === null) {
+                    cachedNSDate = classRegistry.NSDate;
+                }
+                if (cachedNSDateCtor === null) {
+                    cachedNSDateCtor = cachedNSDate.dateWithTimeIntervalSince1970_;
+                }
+                return cachedNSDateCtor.call(cachedNSDate, v.getTime());
+            }
+            else if (v.constructor === ArrayBuffer) {
+                if (cachedNSData === null) {
+                    cachedNSData = classRegistry.NSData;
+                }
+                if (cachedNSDataCtor === null) {
+                    cachedNSDataCtor = cachedNSData.dataWithBytes_length_;
+                }
+                let buf = Memory.alloc(v.byteLength);
+                buf.writeByteArray(v);
+                return cachedNSDataCtor.call(cachedNSData, buf, v.byteLength);
+            }
+            else if (v.constructor === Array) {
+                if (cachedNSMutableArray === null) {
+                    cachedNSMutableArray = classRegistry.NSMutableArray;
+                }
+                if (cachedNSMutableArrayCtor === null) {
+                    cachedNSMutableArrayCtor = cachedNSMutableArray.array;
+                }
+                let array = cachedNSMutableArrayCtor.call(cachedNSMutableArray);
+                let arrayAddObject = array.addObject_;
+                for (let i = 0; i < v.length; i++) {
+                    arrayAddObject.call(array, toNativeId(v[i], true));
+                }
+                return array;
+            }
+            else if (v.constructor === Object) {
+                if (cachedNSMutableDictionary === null) {
+                    cachedNSMutableDictionary = classRegistry.NSMutableDictionary;
+                }
+                if (cachedNSMutableDictionaryCtor === null) {
+                    cachedNSMutableDictionaryCtor = cachedNSMutableDictionary.dictionary;
+                }
+                let dict = cachedNSMutableDictionaryCtor.call(cachedNSMutableDictionary);
+                let dictSetObjectForKey = dict.setObject_forKey_;
+                for (const key in v) {
+                    if (v.hasOwnProperty(key)) {
+                        const val = v[key];
+                        dictSetObjectForKey.call(dict, toNativeId(val, true), toNativeId(key, true));
+                    }
+                }
+                return dict;
+            }
         }
 
         return v;
